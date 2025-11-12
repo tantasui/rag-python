@@ -1,49 +1,87 @@
-import { useState, useEffect } from 'react';
-import { useCurrentAccount } from '@mysten/dapp-kit';
+import { useState, useEffect, useCallback } from 'react';
+import { useCurrentAccount, useSuiClient } from '@mysten/dapp-kit';
 import axios from 'axios';
+
+// Sui package configuration - should match backend .env
+const SUI_PACKAGE_ID = '0x29882692892abd61964dbff7de9364bb56a96c4fcfe45c26e3e4b4d4f722b48c';
+const SUI_MODULE_NAME = 'registry';
 
 function DocumentList({ onDocumentsUpdate, refreshTrigger }) {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const currentAccount = useCurrentAccount();
+  const client = useSuiClient();
 
-  useEffect(() => {
-    if (currentAccount) {
-      fetchDocuments();
-    } else {
-      setDocuments([]);
-    }
-  }, [currentAccount, refreshTrigger]);
-
-  const fetchDocuments = async () => {
-    if (!currentAccount) return;
+  const fetchDocuments = useCallback(async () => {
+    if (!currentAccount || !client) return;
 
     setLoading(true);
     setError(null);
 
     try {
-      const response = await axios.get(
-        `/api/documents/${currentAccount.address}`
-      );
+      // Query owned objects of DocumentAsset type from Sui
+      const objectType = `${SUI_PACKAGE_ID}::${SUI_MODULE_NAME}::DocumentAsset`;
+      
+      const ownedObjects = await client.getOwnedObjects({
+        owner: currentAccount.address,
+        filter: {
+          StructType: objectType,
+        },
+        options: {
+          showContent: true,
+          showType: true,
+        },
+      });
 
-      setDocuments(response.data.documents);
+      // Parse the objects into document format
+      const parsedDocuments = [];
+      
+      for (const obj of ownedObjects.data) {
+        if (obj.data && obj.data.content && 'fields' in obj.data.content) {
+          const fields = obj.data.content.fields;
+          parsedDocuments.push({
+            id: obj.data.objectId,
+            name: fields.name || '',
+            owner: fields.owner || currentAccount.address,
+            walrus_blob_id: fields.walrus_blob_id || '',
+            uploaded_at: fields.uploaded_at || 0,
+            is_public: fields.is_public || false,
+          });
+        }
+      }
+
+      setDocuments(parsedDocuments);
 
       if (onDocumentsUpdate) {
-        onDocumentsUpdate(response.data.documents);
+        onDocumentsUpdate(parsedDocuments);
       }
 
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load documents');
+      setError(err.message || 'Failed to load documents');
       console.error('Fetch documents error:', err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentAccount, client]);
+
+  useEffect(() => {
+    if (currentAccount && client) {
+      fetchDocuments();
+    } else {
+      setDocuments([]);
+    }
+  }, [currentAccount, refreshTrigger, client, fetchDocuments]);
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'N/A';
-    return new Date(timestamp).toLocaleDateString();
+    // Sui timestamps are in milliseconds
+    try {
+      const date = new Date(Number(timestamp));
+      return date.toLocaleDateString();
+    } catch {
+      return 'N/A';
+    }
   };
 
   if (!currentAccount) {

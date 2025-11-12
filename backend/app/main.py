@@ -11,7 +11,8 @@ from .models.schemas import (
     QueryResponse,
     UserDocumentsResponse,
     HealthCheckResponse,
-    DocumentMetadata
+    DocumentMetadata,
+    SuiTransactionData
 )
 from .services.walrus_service import WalrusService
 from .services.sui_service import SuiService
@@ -92,60 +93,64 @@ async def upload_document(
 
         # Step 1: Upload to Walrus
         logger.info("Uploading to Walrus...")
-        walrus_result = await walrus_service.upload_blob(file_content)
-        blob_id = walrus_result["blob_id"]
-        logger.info(f"Uploaded to Walrus: {blob_id}")
+        try:
+            walrus_result = await walrus_service.upload_blob(file_content)
+            blob_id = walrus_result["blob_id"]
+            logger.info(f"Uploaded to Walrus: {blob_id}")
+        except Exception as e:
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
+            logger.error(f"Walrus upload failed: {error_msg}", exc_info=True)
+            raise Exception(f"Failed to upload to Walrus: {error_msg}")
 
-        # Step 2: Mint NFT on Sui (if package is configured)
-        sui_result = None
+        # Step 2: Prepare Sui transaction data for frontend to sign (if package is configured)
+        sui_transaction_data = None
         if settings.sui_package_id:
-            try:
-                logger.info("Minting document NFT on Sui...")
-                sui_result = sui_service.mint_document(
-                    name=file.filename,
-                    walrus_blob_id=blob_id,
-                    is_public=is_public,
-                    signer_address=wallet_address
-                )
-                logger.info(f"Minted on Sui: {sui_result['transaction_digest']}")
-            except Exception as e:
-                logger.error(f"Sui minting failed: {str(e)}")
-                # Continue even if Sui fails
-                sui_result = {
-                    "transaction_digest": "error",
-                    "status": "failed",
-                    "error": str(e)
-                }
+            logger.info("Preparing Sui transaction data for frontend...")
+            sui_transaction_data = {
+                "package_id": settings.sui_package_id,
+                "module_name": settings.sui_module_name,
+                "function_name": "mint_document",
+                "arguments": {
+                    "name": file.filename,
+                    "walrus_blob_id": blob_id,
+                    "is_public": is_public
+                },
+                "gas_budget": 10000000
+            }
         else:
             logger.warning("Sui package not configured, skipping NFT minting")
-            sui_result = {
-                "transaction_digest": "not_configured",
-                "status": "skipped"
-            }
 
         # Step 3: Process document for RAG
         logger.info("Processing document for RAG...")
-        rag_result = await rag_service.process_document(
-            blob_id=blob_id,
-            content=file_content,
-            filename=file.filename,
-            metadata={
-                "owner": wallet_address,
-                "is_public": is_public
-            }
-        )
-        logger.info(f"RAG processing complete: {rag_result['chunks_created']} chunks created")
+        try:
+            rag_result = await rag_service.process_document(
+                blob_id=blob_id,
+                content=file_content,
+                filename=file.filename,
+                metadata={
+                    "owner": wallet_address,
+                    "is_public": is_public
+                }
+            )
+            logger.info(f"RAG processing complete: {rag_result['chunks_created']} chunks created")
+        except Exception as e:
+            error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
+            logger.error(f"RAG processing failed: {error_msg}", exc_info=True)
+            # Continue even if RAG fails - document is still uploaded to Walrus
+            logger.warning("Continuing without RAG processing due to error")
 
         return DocumentUploadResponse(
             walrus_blob_id=blob_id,
-            sui_transaction_digest=sui_result["transaction_digest"],
-            document_id=sui_result.get("document_object_id"),
-            message="Document uploaded and processed successfully"
+            sui_transaction_digest=None,  # Will be set after user signs transaction
+            document_id=None,  # Will be set after transaction completes
+            message="Document uploaded to Walrus. Please sign the transaction to mint NFT on Sui.",
+            sui_transaction_data=sui_transaction_data
         )
 
     except Exception as e:
-        logger.error(f"Upload failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e) if str(e) else f"{type(e).__name__}: {repr(e)}"
+        logger.error(f"Upload failed: {error_msg}", exc_info=True)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.post("/query", response_model=QueryResponse)
@@ -297,6 +302,37 @@ async def delete_document(blob_id: str, wallet_address: str):
 
     except Exception as e:
         logger.error(f"Delete failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/complete-upload")
+async def complete_upload(
+    blob_id: str = Form(...),
+    transaction_digest: str = Form(...),
+    wallet_address: str = Form(...)
+):
+    """
+    Complete the upload process after Sui transaction is signed
+    
+    Args:
+        blob_id: Walrus blob ID
+        transaction_digest: Sui transaction digest
+        wallet_address: Wallet address that signed the transaction
+    """
+    try:
+        logger.info(f"Completing upload for blob {blob_id} with transaction {transaction_digest}")
+        
+        # Optionally verify the transaction and extract document ID
+        # For now, we'll just log it
+        return {
+            "status": "success",
+            "message": "Upload completed successfully",
+            "blob_id": blob_id,
+            "transaction_digest": transaction_digest
+        }
+    
+    except Exception as e:
+        logger.error(f"Failed to complete upload: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

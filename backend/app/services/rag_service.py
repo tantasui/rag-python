@@ -16,28 +16,15 @@ class RAGService:
 
     def __init__(self):
         self.settings = get_settings()
+        self._embeddings = None
+        self._vectorstore = None
+        self._llm = None
 
-        # Initialize OpenAI
-        os.environ["OPENAI_API_KEY"] = self.settings.openai_api_key
-        self.embeddings = OpenAIEmbeddings()
-
-        # Initialize ChromaDB
-        self.vectorstore = Chroma(
-            persist_directory=self.settings.chroma_persist_directory,
-            embedding_function=self.embeddings
-        )
-
-        # Initialize text splitter
+        # Initialize text splitter (doesn't require API keys)
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.settings.chunk_size,
             chunk_overlap=self.settings.chunk_overlap,
             length_function=len,
-        )
-
-        # Initialize LLM
-        self.llm = ChatOpenAI(
-            temperature=self.settings.llm_temperature,
-            model="gpt-3.5-turbo"
         )
 
         # Custom prompt template
@@ -55,6 +42,36 @@ Answer: """
             template=self.prompt_template,
             input_variables=["context", "question"]
         )
+
+    def _get_embeddings(self) -> OpenAIEmbeddings:
+        """Lazy initialization of embeddings"""
+        if self._embeddings is None:
+            if not self.settings.openai_api_key:
+                raise ValueError("OPENAI_API_KEY is required for RAG operations. Please set it in your environment variables.")
+            os.environ["OPENAI_API_KEY"] = self.settings.openai_api_key
+            self._embeddings = OpenAIEmbeddings()
+        return self._embeddings
+
+    def _get_vectorstore(self) -> Chroma:
+        """Lazy initialization of vectorstore"""
+        if self._vectorstore is None:
+            self._vectorstore = Chroma(
+                persist_directory=self.settings.chroma_persist_directory,
+                embedding_function=self._get_embeddings()
+            )
+        return self._vectorstore
+
+    def _get_llm(self) -> ChatOpenAI:
+        """Lazy initialization of LLM"""
+        if self._llm is None:
+            if not self.settings.openai_api_key:
+                raise ValueError("OPENAI_API_KEY is required for RAG operations. Please set it in your environment variables.")
+            os.environ["OPENAI_API_KEY"] = self.settings.openai_api_key
+            self._llm = ChatOpenAI(
+                temperature=self.settings.llm_temperature,
+                model="gpt-3.5-turbo"
+            )
+        return self._llm
 
     def extract_text_from_pdf(self, content: bytes) -> str:
         """
@@ -143,13 +160,14 @@ Answer: """
                 metadatas.append(chunk_metadata)
 
             # Add to vector store
-            self.vectorstore.add_texts(
+            vectorstore = self._get_vectorstore()
+            vectorstore.add_texts(
                 texts=chunks,
                 metadatas=metadatas
             )
 
             # Persist the changes
-            self.vectorstore.persist()
+            vectorstore.persist()
 
             return {
                 "success": True,
@@ -189,7 +207,8 @@ Answer: """
                 }
 
             # Perform similarity search
-            docs = self.vectorstore.similarity_search(
+            vectorstore = self._get_vectorstore()
+            docs = vectorstore.similarity_search(
                 question,
                 **search_kwargs
             )
@@ -210,7 +229,8 @@ Answer: """
                 question=question
             )
 
-            answer = self.llm.predict(formatted_prompt)
+            llm = self._get_llm()
+            answer = llm.predict(formatted_prompt)
 
             # Prepare sources
             sources = []
@@ -242,14 +262,15 @@ Answer: """
         """
         try:
             # Get all documents with this blob_id
-            results = self.vectorstore.get(
+            vectorstore = self._get_vectorstore()
+            results = vectorstore.get(
                 where={"walrus_blob_id": blob_id}
             )
 
             if results and 'ids' in results:
                 # Delete by IDs
-                self.vectorstore.delete(ids=results['ids'])
-                self.vectorstore.persist()
+                vectorstore.delete(ids=results['ids'])
+                vectorstore.persist()
 
                 return {
                     "success": True,
@@ -275,7 +296,8 @@ Answer: """
             Document statistics
         """
         try:
-            results = self.vectorstore.get(
+            vectorstore = self._get_vectorstore()
+            results = vectorstore.get(
                 where={"walrus_blob_id": blob_id}
             )
 

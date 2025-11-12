@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # Application Configuration
     app_name: str = "Decentralized RAG System"
     debug: bool = os.getenv("DEBUG", "false").lower() == "true"
-    cors_origins: list = ["http://localhost:3000", "http://localhost:5173"]
+    cors_origins: list = ["http://localhost:3000", "http://localhost:3002", "http://localhost:5173"]
 
     # RAG Configuration
     chunk_size: int = 1000
@@ -39,7 +39,9 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"
 
 
 @lru_cache()

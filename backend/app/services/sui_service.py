@@ -13,20 +13,29 @@ class SuiService:
         self.settings = get_settings()
         self.package_id = self.settings.sui_package_id
         self.module_name = self.settings.sui_module_name
-        self.client = self._get_client()
+        self._client = None
 
     def _get_client(self) -> SyncClient:
-        """Initialize Sui client based on network configuration"""
-        if self.settings.sui_network == "mainnet":
-            config = SuiConfig.default_config()
-        elif self.settings.sui_network == "testnet":
-            config = SuiConfig.sui_base_config()
-        elif self.settings.sui_network == "devnet":
-            config = SuiConfig.default_config()
-        else:
-            config = SuiConfig.default_config()
+        """Initialize Sui client based on network configuration (lazy initialization)"""
+        if self._client is None:
+            try:
+                if self.settings.sui_network == "mainnet":
+                    config = SuiConfig.default_config()
+                elif self.settings.sui_network == "testnet":
+                    # Try sui_base_config first, fallback to default if suibase not configured
+                    try:
+                        config = SuiConfig.sui_base_config()
+                    except (FileNotFoundError, OSError):
+                        config = SuiConfig.default_config()
+                elif self.settings.sui_network == "devnet":
+                    config = SuiConfig.default_config()
+                else:
+                    config = SuiConfig.default_config()
 
-        return SyncClient(config)
+                self._client = SyncClient(config)
+            except Exception as e:
+                raise Exception(f"Failed to initialize Sui client: {str(e)}. Please ensure Sui is properly configured.")
+        return self._client
 
     def mint_document(
         self,
@@ -49,7 +58,7 @@ class SuiService:
         """
         try:
             # Create transaction
-            txn = SyncTransaction(client=self.client, compress_inputs=True)
+            txn = SyncTransaction(client=self._get_client(), compress_inputs=True)
 
             # Add move call to mint document
             txn.move_call(
@@ -98,7 +107,7 @@ class SuiService:
         """
         try:
             # Query owned objects of DocumentAsset type
-            result = self.client.get_objects(
+            result = self._get_client().get_objects(
                 owner=SuiAddress(wallet_address),
                 object_type=f"{self.package_id}::{self.module_name}::DocumentAsset"
             )
@@ -107,7 +116,7 @@ class SuiService:
             if result.is_ok() and result.result_data:
                 for obj in result.result_data.data:
                     # Get full object details
-                    obj_result = self.client.get_object(obj.object_id)
+                    obj_result = self._get_client().get_object(obj.object_id)
 
                     if obj_result.is_ok() and obj_result.result_data:
                         obj_data = obj_result.result_data
@@ -139,7 +148,7 @@ class SuiService:
             Document metadata or None
         """
         try:
-            result = self.client.get_object(ObjectID(document_id))
+            result = self._get_client().get_object(ObjectID(document_id))
 
             if result.is_ok() and result.result_data:
                 obj_data = result.result_data

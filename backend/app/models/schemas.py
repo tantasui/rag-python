@@ -1,13 +1,23 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 
 
 class DocumentUploadResponse(BaseModel):
     walrus_blob_id: str
-    sui_transaction_digest: str
+    sui_transaction_digest: Optional[str] = None
     document_id: Optional[str] = None
     message: str = "Document uploaded successfully"
+    sui_transaction_data: Optional[Dict] = None  # Transaction data for frontend to sign
+
+
+class SuiTransactionData(BaseModel):
+    """Transaction data for frontend to construct and sign"""
+    package_id: str
+    module_name: str
+    function_name: str = "mint_document"
+    arguments: Dict  # Arguments needed for the transaction
+    gas_budget: Optional[int] = 10000000
 
 
 class DocumentMetadata(BaseModel):

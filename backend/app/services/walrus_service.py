@@ -26,7 +26,7 @@ class WalrusService:
             try:
                 # Upload to Walrus
                 response = await client.put(
-                    f"{self.publisher_url}/v1/store",
+                    f"{self.publisher_url}/v1/blobs",
                     content=content,
                     params={"epochs": self.epochs},
                     headers={"Content-Type": "application/octet-stream"}
@@ -53,7 +53,10 @@ class WalrusService:
                     raise ValueError(f"Unexpected Walrus response format: {result}")
 
             except httpx.HTTPError as e:
-                raise Exception(f"Failed to upload to Walrus: {str(e)}")
+                error_msg = str(e) if str(e) else f"HTTP {e.response.status_code if hasattr(e, 'response') and e.response else 'Unknown'}: {e.response.text if hasattr(e, 'response') and e.response else 'No response'}"
+                raise Exception(f"Failed to upload to Walrus: {error_msg}")
+            except Exception as e:
+                raise Exception(f"Failed to upload to Walrus: {str(e) or type(e).__name__}")
 
     async def download_blob(self, blob_id: str) -> bytes:
         """
@@ -68,7 +71,7 @@ class WalrusService:
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 response = await client.get(
-                    f"{self.aggregator_url}/v1/{blob_id}"
+                    f"{self.aggregator_url}/v1/blobs/{blob_id}"
                 )
                 response.raise_for_status()
                 return response.content
@@ -89,7 +92,7 @@ class WalrusService:
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
                 response = await client.head(
-                    f"{self.aggregator_url}/v1/{blob_id}"
+                    f"{self.aggregator_url}/v1/blobs/{blob_id}"
                 )
                 return {
                     "exists": response.status_code == 200,
